@@ -1,0 +1,15 @@
+[package]
+name = "mqttd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# MQTT server
+rumqttd = "0.19.0"
+# logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# async
+tokio = { workspace = true }
+# additional dependencies
+config = "0.14.0"

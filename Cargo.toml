@@ -1,0 +1,8 @@
+[workspace]
+members = ["hub", "mqttd"]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1.38.0", features = ["full"] }
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
