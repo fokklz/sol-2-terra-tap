@@ -1,68 +1,50 @@
-#include <ESP8266WiFi.h>
 #include <PubSubClient.h>
-#include <time.h>
-#include <TimeLib.h> 
+#include <SimpleConnect.h>
+#include <SimpleSleep.h>
+#include <SimpleDebug.h>
 
+// ##################################
+// # Global declarations
+
+bool DEBUG_ENABLED = true;
 const int threshold = 700;
 const char *ssid = "Apple Network 785";
 const char *password = "";
 const char *mqtt_server = "192.168.1.80";
-
 const char *prefix = "ttap_watering_";
-size_t random_length = 8;
-size_t total_length = strlen(prefix) + random_length;
-char *client_name = (char *)malloc(total_length + 1);
+const int settings_count = 2;
+int settings_set = 0;
 
-// Create WiFi and MQTT clients
-WiFiClient espClient;
+// TRACKING
+String client_name;
+unsigned long startTime;
+bool needs_water;
+bool requested;
+
+// SETTINGS
+int open_duration = 5 * 60;
+String check_time = "03:00";
+
+
 PubSubClient client(espClient);
 
-// Configure the correct time
-void setupTime() {
-  // setoff for 2 hours
-  configTime(2*3600, 0, "pool.ntp.org", "time.nist.gov");
-  // Wait until time is set
-  while (time(nullptr) < 8 * 3600 * 2) { 
-      delay(100);
-  }
-}
+// ##################################
+// # Functions
 
-// Function to connect to Wi-Fi
-void setup_wifi() {
-  Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
+// Reset the state of the Application
+// (should also be run at the start to normalize behavior)
+void reset(){
+  debug("State reseting");
+  client_name = prefix + generateRandomID(6);
+  info("Client name:", client_name);
 
-  WiFi.begin(ssid, password);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.println("");
-  Serial.println("WiFi connected");
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
-}
-
-// Function to generate a random alphanumeric string
-void generate_random_string_with_prefix(char *output_string, const char *prefix, size_t random_length) {
-    const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    size_t charset_size = sizeof(charset) - 1;
-    size_t prefix_length = strlen(prefix);
-
-    // Copy prefix to output_string
-    strcpy(output_string, prefix);
-
-    // Generate random part of the string
-    for (size_t i = 0; i < random_length; i++) {
-        int random_index = os_random() % charset_size;
-        output_string[prefix_length + i] = charset[random_index];
-    }
-
-    // Null-terminate the string
-    output_string[prefix_length + random_length] = '\0';
+  // normalize state
+  startTime = 0;
+  needs_water = false;
+  requested = false;
+  settings_set = 0;
+  digitalWrite(LED_BUILTIN, HIGH);
+  digitalWrite(D1, LOW);
 }
 
 // Callback function to handle incoming messages
@@ -71,44 +53,107 @@ void callback(char* topic, byte* payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) {
     message += (char)payload[i];
   }
-
   String topicStr = String(topic);
+
+  debug("Message arrived [", topicStr, "]: ", message);
+
+  // Update settings from MQTT
+  if (topicStr.startsWith("settings/home/watering")) {
+    if (topicStr.endsWith("/check_time")) {
+      check_time = message;
+      debug("Updated check time:", check_time);
+      settings_set++;
+    }
+    if (topicStr.endsWith("/open_duration")) {
+      open_duration = message.toInt();
+      debug("Updated open duration:", open_duration);
+      settings_set++;
+    }  
+  }else if (topicStr.startsWith("home/watering")){
+    if (topicStr.endsWith("/response")){
+      message.toLowerCase();
+      if (message == "true"){
+        needs_water = true;
+      }else{
+        needs_water = false;
+      }
+      
+      startTime = millis();
+    }
+  }
 }
 
 // Function to reconnect to the MQTT broker
 void reconnect() {
   while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    if (client.connect(client_name)) {
-      Serial.println("connected");
+    debug("Attempting MQTT connection...");
+    if (client.connect(client_name.c_str())) {
+      debug("MQTT connected");
+      client.subscribe("settings/home/watering/#");
+      client.subscribe("home/watering/#/response");
     } else {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 1 second");
+      debug("Failed to connect to MQTT rc=", client.state(), "try again in 1 second");
       delay(1000);
     }
   }
 }
 
+// ##################################
+// # Main
+
 void setup() {
   Serial.begin(9600);
-  // allow the system to boot
-  delay(10);
-  generate_random_string_with_prefix(client_name, prefix, random_length);
-  setup_wifi();
+  // Give time to boot
+  while (!Serial) { }
+
+  setup_wifi(ssid, password);
   setupTime();
 
   // Initialize LED as Output
   pinMode(LED_BUILTIN, OUTPUT);
-  
+  // Pin connected to relais
+  pinMode(D1, OUTPUT);
+
+  // Initialize MQTT
   client.setServer(mqtt_server, 1883);
   client.setCallback(callback);
+
+  reset();
 }
 
 void loop() {
+  long now = millis();
+  if (startTime > 0) {
+    if (needs_water){
+      digitalWrite(LED_BUILTIN, LOW);
+      digitalWrite(D1, HIGH);
+
+      if (now - startTime > open_duration * 1000){
+          reset();
+          sleepUntil(check_time);
+      }
+    }else{
+      reset();
+      sleepUntil(check_time);
+    }
+    return;
+  }
+
   // ensure MQTT is always connected
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
+
+  if (settings_set < settings_count){
+    // wait for settings to be set
+    return;
+  }
+
+  if (!requested){
+    debug("Checking for water needs...");
+    // request watering state
+    client.publish("home/watering/watering_needed", "");
+    requested = true;
+  }
 }
