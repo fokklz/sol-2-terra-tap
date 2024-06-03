@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use once_cell::sync::OnceCell;
-use rumqttc::{AsyncClient, MqttOptions};
-use tokio::sync::{broadcast::Receiver, Mutex};
+use rumqttc::{ AsyncClient, MqttOptions };
+use tokio::sync::{ broadcast::Receiver, Mutex };
 use tracing::span;
 
 pub static CLIENT: OnceCell<Mutex<AsyncClient>> = OnceCell::new();
@@ -30,10 +30,17 @@ pub async fn run(mut shutdown: Receiver<()>) -> tokio::task::JoinHandle<()> {
                                     rumqttc::Incoming::Publish(publish) => {
                                         let topic = publish.topic;
                                         let payload = publish.payload;
-                                        tracing::info!("Topic = {:#?}, Received = {:#?}", topic, payload);
+
+                                        // aquire the module manager and handle the message
+                                        let manager = crate::MODULE_MANAGER.lock().await;
+                                        manager.handle_message(&topic, std::str::from_utf8(&payload).unwrap()).await;
+                                        // free the manager
+                                        drop(manager);
                                     }
                                     rumqttc::Incoming::ConnAck(_) => {
                                         // Initialize the modules once the connection is acknowledged
+                                        let manager = crate::MODULE_MANAGER.lock().await;
+                                        manager.initialize(&client);
                                     }
                                     // for now any other messages are just irgnored
                                     _ => {

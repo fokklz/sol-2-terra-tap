@@ -1,3 +1,4 @@
+use modules::{SensorModule, WateringModule};
 use once_cell::sync::{Lazy, OnceCell};
 use std::{
     io,
@@ -7,12 +8,18 @@ use tokio::{
     signal,
     sync::{broadcast, Mutex},
 };
-use tracing_subscriber::FmtSubscriber;
+use traits::ConfigFile;
 
 mod core;
 pub use core::*;
 
+mod modules;
 mod mqttc;
+mod settings;
+mod state;
+
+pub use settings::Settings;
+pub use state::State;
 
 // Re-export the client for easy access
 pub use mqttc::CLIENT;
@@ -40,21 +47,19 @@ fn spawn_broker() -> io::Result<Child> {
 
 // Global handle to the MQTT broker
 static BROKER: OnceCell<Mutex<Child>> = OnceCell::new();
+// Global handle to the settings
+static SETTINGS: OnceCell<Mutex<Settings>> = OnceCell::new();
+// Global handle to the state
+static STATE: OnceCell<Mutex<State>> = OnceCell::new();
+// Global handle to the module manager
+static MODULE_MANAGER: Lazy<Mutex<ModuleManager>> = Lazy::new(|| Mutex::new(ModuleManager::new()));
 
 #[tokio::main]
 async fn main() {
     std::env::set_var("RUST_LOG", "debug");
     check_release_mode();
 
-    // Initialize tracing with a custom formatter
-    let subscriber = FmtSubscriber::builder()
-        .with_level(true)
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_thread_names(false)
-        .finish();
-
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    tracing_subscriber::fmt::init();
 
     // Shutdown channel to ensure graceful shutdown
     let (shutdown_tx, shutdown_rx) = broadcast::channel::<()>(1);
@@ -69,6 +74,19 @@ async fn main() {
     // #####################################################################
     // # Code above should not be modified, as it ensures the proper operation of the program.
     // # It also guarantees that the program will log anything it does
+
+    // create settings and state handles
+    let settings = Settings::load();
+    let state = State::load();
+    let _ = STATE.set(Mutex::new(state)).unwrap();
+    let _ = SETTINGS.set(Mutex::new(settings.clone())).unwrap();
+
+    // Register the modules
+    let mut manager = MODULE_MANAGER.lock().await;
+    manager.register_module(SensorModule::from(&settings));
+    manager.register_module(WateringModule::from(&settings));
+    // ensure the manager is available for the client
+    drop(manager);
 
     tracing::info!("TerraTap running... Press Ctrl+C to exit.");
     tracing::info!("Starting MQTT broker... This may take a few seconds.");
@@ -92,6 +110,9 @@ async fn main() {
     }
     // kill the broker to be sure all tasks are cleaned up
     let _ = BROKER.get().unwrap().lock().await.kill();
+    // Save the state and settings before exiting
+    STATE.get().unwrap().lock().await.save();
+    SETTINGS.get().unwrap().lock().await.save();
 
     tracing::info!("Thank you for using TerraTap! Until next time!");
 }
