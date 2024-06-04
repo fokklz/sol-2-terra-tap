@@ -1,12 +1,9 @@
 [package]
-name = "hub"
+name = "e2e"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# JSON support
-serde = { version = "1.0.203", features = ["derive"] }
-serde_json = "1.0.117"
 # logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -16,5 +13,3 @@ tokio = { workspace = true }
 rumqttc = { workspace = true }
 # additional dependencies
 once_cell = { workspace = true }
-chrono = "0.4.38"
-async-trait = "0.1.80"

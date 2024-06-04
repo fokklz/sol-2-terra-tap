@@ -1,5 +1,5 @@
 use chrono::NaiveTime;
-use serde::{ Deserialize, Serialize };
+use serde::{Deserialize, Serialize};
 
 use crate::traits::ConfigFile;
 
